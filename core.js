@@ -11,7 +11,7 @@ const adminCode=()=>sessionStorage.getItem('st_admin_code')||'';
 let state=null,channel=null,loading=false;
 function toast(msg,error=false){let d=document.createElement('div');d.className='toast';d.textContent=msg;d.style.borderColor=error?'#f78698':'#6a99c4';document.body.append(d);setTimeout(()=>d.remove(),4500)}
 async function auth(){let {data:{session}}=await db.auth.getSession();if(!session){let {error}=await db.auth.signInAnonymously();if(error)throw error}}
-async function api(action,extra={},which=''){let c=which==='admin'?adminCode():which==='investor'?code():'';const {data,error}=await db.rpc('st_api',{p_action:action,p:{...extra,code:c}});if(error)throw error;return data}
+async function api(action,extra={},which=''){let c=which==='admin'?adminCode():which==='investor'?code():'';const {data,error}=await db.rpc('st_api',{p_action:action,p:{...extra,...(which?{code:c}:{})}});if(error)throw error;return data}
 async function sync(){if(loading)return;loading=true;try{state=await api('state',{},location.pathname.endsWith('host.html')?'admin':location.pathname.endsWith('investor.html')?'investor':'');render()}catch(e){toast(e.message,true)}finally{loading=false}}
 async function act(name,obj={},as='admin'){try{await api(name,obj,as);await sync();toast('Saved successfully')}catch(e){toast(e.message,true)}}
 async function init(){try{await auth();await sync();channel=db.channel('st-changes').on('postgres_changes',{event:'UPDATE',schema:'public',table:'st_signal'},()=>sync()).subscribe();document.addEventListener('visibilitychange',()=>{if(!document.hidden)sync()});setInterval(sync,30000)}catch(e){toast('Connection failed: '+e.message,true)}}
