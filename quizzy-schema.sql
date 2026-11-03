@@ -28,6 +28,7 @@ create table if not exists public.quizzy_sessions (
   score_mode text not null default 'speed' check(score_mode in ('speed','accuracy')),
   team_mode text not null default 'sum' check(team_mode in ('sum','average')),
   streak_enabled boolean not null default false,
+  randomize_options boolean not null default true,
   display_mode text not null default 'both' check(display_mode in ('both','projector')),
   teams jsonb not null default '[]'::jsonb,
   phase text not null default 'lobby' check(phase in ('lobby','question','paused','reveal','leaderboard','finished')),
@@ -169,8 +170,8 @@ begin
     loop
       code:=lpad((floor(random()*1000000))::int::text,6,'0');
       begin
-        insert into public.quizzy_sessions(pin,host_id,quiz_id,snapshot,title,mode,score_mode,team_mode,streak_enabled,display_mode,teams)
-        values(code,h.id,q.id,q.content,q.title,p->>'mode',p->>'score_mode',p->>'team_mode',coalesce((p->>'streak_enabled')::boolean,false),p->>'display_mode',coalesce(p->'teams','[]'::jsonb)) returning * into s;
+        insert into public.quizzy_sessions(pin,host_id,quiz_id,snapshot,title,mode,score_mode,team_mode,streak_enabled,randomize_options,display_mode,teams)
+        values(code,h.id,q.id,q.content,q.title,p->>'mode',p->>'score_mode',p->>'team_mode',coalesce((p->>'streak_enabled')::boolean,false),coalesce((p->>'randomize_options')::boolean,true),p->>'display_mode',coalesce(p->'teams','[]'::jsonb)) returning * into s;
         exit;
       exception when unique_violation then continue;
       end;
@@ -210,6 +211,12 @@ begin
     if s.question_index>=0 then
       question:=questions->s.question_index;
       if p_action='public_state' then
+        select * into player from public.quizzy_players where session_id=s.id and auth_user=uid;
+        if player.id is not null and s.randomize_options and s.display_mode='both' and (question->>'type')<>'numeric' then
+          select coalesce(jsonb_agg(v.option_text order by md5(player.id::text||v.option_text)), '[]'::jsonb) into opts
+          from jsonb_array_elements_text(question->'options') v(option_text);
+          question:=jsonb_set(question,'{options}',opts);
+        end if;
         question:=question - 'correct' - 'value' - 'tolerance' - 'explanation';
       end if;
     else question:=null;
@@ -273,7 +280,7 @@ begin
     code:=p->>'command';
     if code='start' or code='next' then
       if s.question_index+1>=jsonb_array_length(s.snapshot->'questions') then raise exception 'No more questions'; end if;
-      update public.quizzy_sessions set question_index=question_index+1,phase='question',started_at=clock_timestamp(),paused_at=null where id=s.id;
+      update public.quizzy_sessions set question_index=question_index+1,phase=case when exists(select 1 from public.quizzy_answers a where a.session_id=s.id and a.question_index=s.question_index+1) then 'reveal' else 'question' end,started_at=clock_timestamp(),paused_at=null where id=s.id;
     elsif code='pause' then
       if s.phase<>'question' then raise exception 'No active question'; end if;
       update public.quizzy_sessions set phase='paused',paused_at=clock_timestamp() where id=s.id;
@@ -291,7 +298,7 @@ begin
     elsif code='reopen' then
       if coalesce(p->>'confirm','')<>'REOPEN' then raise exception 'Explicit confirmation required'; end if;
       delete from public.quizzy_answers where session_id=s.id and question_index=s.question_index;
-      update public.quizzy_sessions set phase='question',started_at=clock_timestamp(),paused_at=null,cancelled_questions=coalesce((select jsonb_agg(value) from jsonb_array_elements(s.cancelled_questions) value where value<>to_jsonb(s.question_index)),'[]'::jsonb) where id=s.id;
+      update public.quizzy_sessions set phase='question',started_at=clock_timestamp(),paused_at=null,cancelled_questions=coalesce((select jsonb_agg(v.value) from jsonb_array_elements(s.cancelled_questions) v where v.value<>to_jsonb(s.question_index)),'[]'::jsonb) where id=s.id;
     elsif code='skip' then
       update public.quizzy_sessions set phase='reveal',cancelled_questions=cancelled_questions||jsonb_build_array(s.question_index) where id=s.id;
     elsif code='finish' then
