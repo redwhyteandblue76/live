@@ -189,7 +189,7 @@ begin
     if s.phase<>'lobby' or s.joining_locked then raise exception 'Joining is closed'; end if;
     if (select count(*) from public.quizzy_players where session_id=s.id and not removed)>=100 then raise exception 'Game is full'; end if;
     if length(trim(coalesce(p->>'nickname',''))) not between 1 and 30 then raise exception 'Nickname must be 1–30 characters'; end if;
-    if s.mode='team' and not exists(select 1 from jsonb_array_elements_text(s.teams) x where x=p->>'team') then raise exception 'Choose a valid team'; end if;
+    if s.mode='team' and not exists(select 1 from jsonb_array_elements_text(s.teams) as x(value) where x.value=p->>'team') then raise exception 'Choose a valid team'; end if;
     begin
       insert into public.quizzy_players(session_id,auth_user,nickname,team)
       values(s.id,uid,trim(p->>'nickname'),case when s.mode='team' then p->>'team' else null end) returning * into player;
@@ -254,13 +254,13 @@ begin
       is_correct:=abs((answer::text)::numeric-(question->>'value')::numeric)<=(question->>'tolerance')::numeric;
       credit:=case when is_correct then 1 else 0 end;
     elsif question->>'type'='poll' then
-      if jsonb_typeof(answer)<>'string' or not exists(select 1 from jsonb_array_elements_text(question->'options') v where v=trim(both '"' from answer::text)) then raise exception 'Invalid selection'; end if;
+      if jsonb_typeof(answer)<>'string' or not exists(select 1 from jsonb_array_elements_text(question->'options') as v(value) where v.value=answer #>> '{}') then raise exception 'Invalid selection'; end if;
     else
       if jsonb_typeof(answer)<>'array' then raise exception 'Select answer options'; end if;
       select array_agg(distinct v order by v) into selected from jsonb_array_elements_text(answer) v;
       select array_agg(distinct v order by v) into expected from jsonb_array_elements_text(question->'correct') v;
       if cardinality(selected) is null or cardinality(selected)=0 then raise exception 'Select an answer'; end if;
-      if exists(select 1 from unnest(selected) v where not exists(select 1 from jsonb_array_elements_text(question->'options') o where o=v)) then raise exception 'Invalid option'; end if;
+      if exists(select 1 from unnest(selected) v where not exists(select 1 from jsonb_array_elements_text(question->'options') as o(value) where o.value=v)) then raise exception 'Invalid option'; end if;
       if question->>'type' in ('single','tf') and cardinality(selected)<>1 then raise exception 'Choose one option'; end if;
       is_correct:=selected=expected;
       if is_correct then credit:=1;
