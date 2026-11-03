@@ -52,7 +52,7 @@ function renderJoin(){
  $('app').innerHTML=form('joinForm','<label>Six-digit game PIN</label><input name="pin" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" required value="'+attr(p)+'"><label>Nickname</label><input name="nickname" id="nickname" maxlength="30" required value="'+attr(name)+'"><div id="teamSelect">'+(state?.mode==='team'?'<label>Choose a team</label><select name="team" id="team">'+(state.teams||[]).map(t=>option(t,t)).join('')+'</select>':'')+'</div><button style="width:100%;margin-top:16px">Join game →</button>');
  bindForm('joinForm',async d=>{let p=String(d.get('pin')||'').trim(),nickname=String(d.get('nickname')||'').trim(),team=String(d.get('team')||'');await api('join',{pin,nickname,team});persistPin(p);location.href=link('quizzyplay.html',p)});
  const pinBox=$('joinForm').elements.namedItem('pin');
- pinBox.addEventListener('change',async()=>{let p=pinBox.value.trim();if(!/^\d{6}$/.test(p))return;try{state=await api('public_state',{pin:p});const name=$('nickname')?.value||'';renderJoin();$('nickname').value=name;}catch(e){notice('Game lookup: '+e.message)}});
+ pinBox.addEventListener('change',async()=>{let p=pinBox.value.trim();if(!/^\d{6}$/.test(p))return;try{state=await api('public_state',{pin:p});const name=$('nickname')?.value||'';persistPin(p);renderJoin();$('nickname').value=name;}catch(e){notice('Game lookup: '+e.message)}});
  if(state?.mode==='team')$('team')?.setAttribute('value',team);
 }
 function renderPlayer(){
@@ -80,6 +80,7 @@ async function choose(i){
 }
 async function lockMulti(){if(!chosen.length)return notice('Select at least one answer');await execute(async()=>{await api('submit',{pin:pin(),answer:chosen});chosen=[];await refresh()})}
 async function answerNumber(){let v=Number($('numericResponse')?.value);if(!$('numericResponse')?.value||!Number.isFinite(v))return notice('Enter a valid number');await execute(async()=>{await api('submit',{pin:pin(),answer:v});await refresh()})}
+function answerStats(s){if(!s.stats?.length)return '<p>No answers yet.</p>';const groups={};for(let x of s.stats){let label=Array.isArray(x.response)?x.response.join(' · '):String(x.response);groups[label]=(groups[label]||0)+1}return '<div class="card"><h2>Responses ('+s.stats.length+')</h2>'+Object.entries(groups).map(([k,v])=>'<div class="between" style="margin:9px 0"><span>'+esc(k)+'</span><strong>'+v+' · '+Math.round(100*v/s.stats.length)+'%</strong></div>').join('')+'</div>'}
 function renderProjector(){
  if(!state){$('app').innerHTML='<div class="card center">Waiting for a game…</div>';return}
  const s=state,phase=s.phase;
@@ -88,13 +89,13 @@ function renderProjector(){
  }
  if(phase==='question'||phase==='paused'){$('app').innerHTML=(phase==='paused'?'<div class="tag">⏸ PAUSED</div>':'')+questionCard(s,true)+'<div class="card center"><h2>'+esc(s.title)+'</h2><p>Answer on your phone</p></div>';renderClock(s);return}
  if(phase==='reveal'||phase==='leaderboard'){
- $('app').innerHTML='<section class="hero center"><div class="eyebrow">Answer reveal</div><h1>'+esc(s.question?.text||'')+'</h1><h2>'+esc(s.question?.type==='numeric'?s.numeric_value:(s.correct||[]).join(' · ')||'Poll results')+'</h2><p>'+esc(s.explanation||'')+'</p></section>'+ (phase==='leaderboard'&&s.rankings_visible?'<div class="card">'+leaders(s)+'</div>':'') + (s.stats?'<p class="center">'+s.stats.length+' responses</p>':'');return}
+ $('app').innerHTML='<section class="hero center"><div class="eyebrow">Answer reveal</div><h1>'+esc(s.question?.text||'')+'</h1><h2>'+esc(s.question?.type==='numeric'?s.numeric_value:(s.correct||[]).join(' · ')||'Poll results')+'</h2><p>'+esc(s.explanation||'')+'</p></section>'+ (phase==='leaderboard'&&s.rankings_visible?'<div class="card">'+leaders(s)+'</div>':'') + answerStats(s);return}
  if(phase==='finished'){$('app').innerHTML='<section class="hero center"><div class="eyebrow">Final standings</div><h1>'+esc(s.title)+'</h1></section>'+podium(s)+'<div class="card">'+leaders(s)+'</div>'}
 }
 function renderResults(){if(!state)return;$('app').innerHTML='<section class="hero center"><h1>'+esc(state.title)+'</h1><p>Results</p></section>'+podium(state)+'<div class="card">'+leaders(state)+'</div>'}
 function loginUI(){
  $('app').innerHTML='<section class="hero"><div class="eyebrow">Quizzy host console</div><h1>Run the show.</h1><p>Enter a Quizzy host code to create games and control a live session.</p></section><section class="card">'+form('loginForm','<label>Private host code</label><input name="code" type="password" autocomplete="off" required><button>Unlock host console</button>')+'</section>';
- bindForm('loginForm',async d=>{sessionStorage.setItem('quizzy_host_code',String(d.get('code')));try{await api('host_login');if(page==='edit')await initEditor();else await initHost()}catch(e){sessionStorage.removeItem('quizzy_host_code');throw e}});
+ bindForm('loginForm',async d=>{sessionStorage.setItem('quizzy_host_code',String(d.get('code')));try{await api('host_login');if(page==='edit'){if(!(await openShare()))await initEditor()}else await initHost()}catch(e){sessionStorage.removeItem('quizzy_host_code');throw e}});
 }
 async function initHost(){if(!hostCode()){loginUI();return}await api('host_login');quizzes=await api('host_quizzes');sessions=await api('host_sessions');renderHost();if(pin()){subscribe();await refresh()}}
 function renderHost(){
