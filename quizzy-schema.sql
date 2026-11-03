@@ -115,7 +115,7 @@ declare
   uid uuid := auth.uid();
 begin
   if uid is null then raise exception 'Sign in anonymously first'; end if;
-  if p_action in ('host_login','host_quizzes','save_quiz','delete_quiz','create_session','host_state','control','adjust','remove_player','create_host','export') then
+  if p_action in ('host_login','host_quizzes','host_sessions','shared_quiz','save_quiz','delete_quiz','create_session','host_state','control','adjust','remove_player','create_host','export') then
     select * into h from public.quizzy_hosts where active and code_hash=extensions.crypt(host_code,code_hash) limit 1;
     if h.id is null then raise exception 'Invalid Quizzy host code'; end if;
   end if;
@@ -126,6 +126,10 @@ begin
     if length(coalesce(p->>'code',''))<12 then raise exception 'Use a host code at least 12 characters'; end if;
     insert into public.quizzy_hosts(label,code_hash) values(left(p->>'label',80),extensions.crypt(p->>'code',extensions.gen_salt('bf')));
     return jsonb_build_object('ok',true);
+  elsif p_action='host_sessions' then
+    select coalesce(jsonb_agg(jsonb_build_object('pin',pin,'title',title,'phase',phase,'created_at',created_at) order by created_at desc),'[]'::jsonb)
+      into result from public.quizzy_sessions where host_id=h.id;
+    return result;
   elsif p_action='host_quizzes' then
     select coalesce(jsonb_agg(jsonb_build_object('id',id,'title',title,'content',content,'share_token',share_token,'owner',owner_id=h.id) order by updated_at desc),'[]'::jsonb)
     into result from public.quizzy_quizzes where owner_id=h.id;
@@ -174,7 +178,7 @@ begin
     insert into public.quizzy_signal(session_id) values(s.id);
     return jsonb_build_object('pin',s.pin);
   elsif p_action='join' then
-    select * into s from public.quizzy_sessions where pin=p->>'pin';
+    select * into s from public.quizzy_sessions where pin=p->>'pin' for update;
     if s.id is null then raise exception 'Game PIN not found'; end if;
     select * into player from public.quizzy_players where session_id=s.id and auth_user=uid;
     if player.id is not null then
@@ -184,10 +188,7 @@ begin
     if s.phase<>'lobby' or s.joining_locked then raise exception 'Joining is closed'; end if;
     if (select count(*) from public.quizzy_players where session_id=s.id and not removed)>=100 then raise exception 'Game is full'; end if;
     if length(trim(coalesce(p->>'nickname',''))) not between 1 and 30 then raise exception 'Nickname must be 1–30 characters'; end if;
-    if s.mode='team' and not (s.teams ? (p->>'team')) then
-      -- jsonb arrays cannot be tested using "?"; verify membership below.
-      if not exists(select 1 from jsonb_array_elements_text(s.teams) x where x=p->>'team') then raise exception 'Choose a valid team'; end if;
-    end if;
+    if s.mode='team' and not exists(select 1 from jsonb_array_elements_text(s.teams) x where x=p->>'team') then raise exception 'Choose a valid team'; end if;
     begin
       insert into public.quizzy_players(session_id,auth_user,nickname,team)
       values(s.id,uid,trim(p->>'nickname'),case when s.mode='team' then p->>'team' else null end) returning * into player;
@@ -290,7 +291,7 @@ begin
     elsif code='reopen' then
       if coalesce(p->>'confirm','')<>'REOPEN' then raise exception 'Explicit confirmation required'; end if;
       delete from public.quizzy_answers where session_id=s.id and question_index=s.question_index;
-      update public.quizzy_sessions set phase='question',started_at=clock_timestamp(),paused_at=null,cancelled_questions=cancelled_questions - s.question_index where id=s.id;
+      update public.quizzy_sessions set phase='question',started_at=clock_timestamp(),paused_at=null,cancelled_questions=coalesce((select jsonb_agg(value) from jsonb_array_elements(s.cancelled_questions) value where value<>to_jsonb(s.question_index)),'[]'::jsonb) where id=s.id;
     elsif code='skip' then
       update public.quizzy_sessions set phase='reveal',cancelled_questions=cancelled_questions||jsonb_build_array(s.question_index) where id=s.id;
     elsif code='finish' then
