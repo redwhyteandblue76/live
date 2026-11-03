@@ -62,6 +62,9 @@ function renderPlayer(){
  const phase=state.phase;
  if(phase==='lobby'){$('app').innerHTML='<section class="hero center"><div class="eyebrow">You are in!</div><h1>'+esc(state.me.nickname)+'</h1><p>Waiting for the host to start · '+(state.players||[]).length+' joined</p></section>';return}
  if(phase==='question'||phase==='paused'){
+ const renderKey=phase+':'+state.question_index+':'+(state.my_answer!=null);
+ if(lastKey===renderKey && $('app').querySelector('.choice,#numericResponse')){renderClock(state);return}
+ lastKey=renderKey;
  $('app').innerHTML='<div class="center muted">Playing as '+esc(state.me.nickname)+'</div>'+((state.my_answer!==null && state.my_answer!==undefined)?'<div class="card center"><h1>✓ Answer locked</h1><p>Waiting for the next question.</p></div>':phase==='paused'?'<div class="card center"><h1>⏸ Game paused</h1><p>Answers are paused.</p></div>':questionCard(state,false));
  renderClock(state);return;
  }
@@ -75,7 +78,7 @@ async function refresh(){if(loading||!pin()||page==='edit')return;loading=true;t
 function subscribe(){if(channel)db.removeChannel(channel);if(!pin())return;channel=db.channel('quizzy-'+pin()).on('postgres_changes',{event:'UPDATE',schema:'public',table:'quizzy_signal'},()=>refresh()).subscribe()}
 async function choose(i){
  if(!state||state.phase!=='question'||state.my_answer!=null)return;
- let q=state.question,v=q.options[i];if(q.type==='multi'){chosen=chosen.includes(v)?chosen.filter(x=>x!==v):[...chosen,v];renderPlayer();return}
+ let q=state.question,v=q.options[i];if(q.type==='multi'){chosen=chosen.includes(v)?chosen.filter(x=>x!==v):[...chosen,v];lastKey='';renderPlayer();return}
  await execute(async()=>{await api('submit',{pin:pin(),answer:q.type==='poll'?v:[v]});chosen=[];await refresh()});
 }
 async function lockMulti(){if(!chosen.length)return notice('Select at least one answer');await execute(async()=>{await api('submit',{pin:pin(),answer:chosen});chosen=[];await refresh()})}
