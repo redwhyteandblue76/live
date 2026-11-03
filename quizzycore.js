@@ -105,7 +105,7 @@ function renderHost(){
  bindForm('newSession',async d=>{
  let teams=String(d.get('teams')||'').split(',').map(x=>x.trim()).filter(Boolean);
  if(d.get('mode')==='team'&&new Set(teams).size<2)throw Error('Enter at least two distinct team names');
- let s=await api('create_session',{quiz_id:d.get('quiz_id'),mode:d.get('mode'),teams:teams,score_mode:d.get('score_mode'),team_mode:d.get('team_mode'),display_mode:d.get('display_mode'),streak_enabled:d.has('streak_enabled')});
+ let s=await api('create_session',{quiz_id:d.get('quiz_id'),mode:d.get('mode'),teams:teams,score_mode:d.get('score_mode'),team_mode:d.get('team_mode'),display_mode:d.get('display_mode'),streak_enabled:d.has('streak_enabled'),randomize_options:d.has('randomize_options')});
  persistPin(s.pin);location.href=link('quizzyhost.html',s.pin);
  });
 }
@@ -128,7 +128,7 @@ async function adjust(player_id){let raw=prompt('Points adjustment (e.g. 100 or 
 async function removePlayer(player_id){if(!confirm('Remove this player?'))return;await execute(async()=>{await api('remove_player',{pin:pin(),player_id});await refresh()})}
 function csv(rows){if(!rows?.length)return notice('No records to export');let keys=[...new Set(rows.flatMap(o=>Object.keys(o)))];let body=[keys,...rows.map(o=>keys.map(k=>typeof o[k]==='object'?JSON.stringify(o[k]):o[k]??''))].map(row=>row.map(v=>'"'+String(v).replaceAll('"','""')+'"').join(',')).join('\r\n');download('quizzy-'+pin()+'.csv',body,'text/csv')}
 function download(filename,body,mime){let u=URL.createObjectURL(new Blob([body],{type:mime})),a=document.createElement('a');a.href=u;a.download=filename;a.click();setTimeout(()=>URL.revokeObjectURL(u),1500)}
-async function exportCSV(){await execute(async()=>{let d=await api('export',{pin:pin()});csv(d.players)})}
+async function exportCSV(){await execute(async()=>{let d=await api('export',{pin:pin()});let names=new Map(d.players.map(p=>[p.id,p.nickname]));let records=[...d.players.map(p=>({kind:'final_player',nickname:p.nickname,team:p.team,score:p.score,removed:p.removed})),...d.answers.map(a=>({kind:'question_answer',nickname:names.get(a.player_id)||'',question:a.question_index+1,answer:JSON.stringify(a.response),correct:a.correct,points:a.points,answered_at:a.answered_at})),...d.adjustments.map(a=>({kind:'score_adjustment',nickname:names.get(a.player_id)||'',points:a.delta,reason:a.reason,created_at:a.created_at}))];csv(records)})}
 async function exportJSON(){await execute(async()=>{let d=await api('export',{pin:pin()});download('quizzy-'+pin()+'.json',JSON.stringify(d,null,2),'application/json')})}
 function defaultQuestion(){return {type:'single',text:'',options:['Option A','Option B','Option C','Option D'],correct:['Option A'],seconds:30,points:1000,multi_scoring:'all',value:0,tolerance:0,explanation:''}}
 async function initEditor(){if(!hostCode()){loginUI();return}await api('host_login');quizzes=await api('host_quizzes');let id=new URLSearchParams(location.search).get('id');if(id){let q=quizzes.find(x=>x.id===id);if(!q)throw Error('Quiz not found');editor={id,title:q.title,questions:structuredClone(q.content.questions)}}else{editor={id:null,title:'',questions:[defaultQuestion()]}}renderEditor()}
