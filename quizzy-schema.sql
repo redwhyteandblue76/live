@@ -194,7 +194,6 @@ begin
       insert into public.quizzy_players(session_id,auth_user,nickname,team)
       values(s.id,uid,trim(p->>'nickname'),case when s.mode='team' then p->>'team' else null end) returning * into player;
     exception when unique_violation then raise exception 'Nickname already taken, or already joined on this device'; end;
-    update public.quizzy_signal set version=version+1 where session_id=s.id;
     return jsonb_build_object('pin',s.pin,'nickname',player.nickname);
   elsif p_action in ('public_state','host_state','export') then
     select * into s from public.quizzy_sessions where pin=p->>'pin';
@@ -272,7 +271,6 @@ begin
     pts:=floor(credit*coalesce((question->>'points')::integer,1000)*multiplier);
     if s.streak_enabled and is_correct and exists(select 1 from public.quizzy_answers a where a.player_id=player.id and a.question_index=s.question_index-1 and a.correct) then pts:=pts+100; end if;
     insert into public.quizzy_answers(session_id,player_id,question_index,response,correct,points) values(s.id,player.id,s.question_index,answer,is_correct,pts);
-    update public.quizzy_signal set version=version+1 where session_id=s.id;
     return jsonb_build_object('accepted',true);
   elsif p_action='control' then
     select * into s from public.quizzy_sessions where pin=p->>'pin' and host_id=h.id for update;
