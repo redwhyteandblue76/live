@@ -254,7 +254,7 @@ begin
       is_correct:=abs((answer::text)::numeric-(question->>'value')::numeric)<=(question->>'tolerance')::numeric;
       credit:=case when is_correct then 1 else 0 end;
     elsif question->>'type'='poll' then
-      if jsonb_typeof(answer)<>'string' or not exists(select 1 from jsonb_array_elements_text(question->'options') as v(value) where v.value=answer #>> '{}') then raise exception 'Invalid selection'; end if;
+      if jsonb_typeof(answer)<>'string' or not exists(select 1 from jsonb_array_elements_text(question->'options') as v(value) where v.value=(answer #>> '{}')) then raise exception 'Invalid selection'; end if;
     else
       if jsonb_typeof(answer)<>'array' then raise exception 'Select answer options'; end if;
       select array_agg(distinct v order by v) into selected from jsonb_array_elements_text(answer) v;
