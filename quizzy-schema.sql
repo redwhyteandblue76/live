@@ -86,6 +86,11 @@ grant select on public.quizzy_signal to authenticated;
 drop policy if exists quizzy_signal_read on public.quizzy_signal;
 create policy quizzy_signal_read on public.quizzy_signal for select to authenticated using (true);
 
+-- Add the server-authoritative answer-closed phase. Safe to run more than once.
+alter table public.quizzy_sessions drop constraint if exists quizzy_sessions_phase_check;
+alter table public.quizzy_sessions add constraint quizzy_sessions_phase_check
+  check (phase in ('lobby','question','paused','closed','reveal','leaderboard','finished'));
+
 create or replace function public.quizzy_api(p_action text,p jsonb default '{}'::jsonb)
 returns jsonb language plpgsql security definer set search_path = '' as $$
 declare
@@ -229,8 +234,28 @@ begin
     exception when unique_violation then raise exception 'Nickname already taken, or already joined on this device'; end;
     return jsonb_build_object('pin',s.pin,'nickname',player.nickname);
   elsif p_action in ('public_state','host_state','export') then
-    select * into s from public.quizzy_sessions where pin=p->>'pin';
+    select * into s from public.quizzy_sessions where pin=p->>'pin' for update;
     if s.id is null then raise exception 'Game not found'; end if;
+    -- Lazy timer closure: the first state read after the deadline closes the
+    -- question on the server, even when no player submits an answer.
+    -- Also covers player removal while others have already answered.
+    if s.phase='question' and (
+      clock_timestamp() >= s.started_at + make_interval(secs => (s.snapshot->'questions'->s.question_index->>'seconds')::int)
+      or (
+        (select count(*) from public.quizzy_players x where x.session_id=s.id and not x.removed)>0
+        and not exists (
+          select 1 from public.quizzy_players x
+          where x.session_id=s.id and not x.removed
+            and not exists (
+              select 1 from public.quizzy_answers a
+              where a.player_id=x.id and a.question_index=s.question_index
+            )
+        )
+      )
+    ) then
+      update public.quizzy_sessions set phase='closed' where id=s.id returning * into s;
+      update public.quizzy_signal set version=version+1 where session_id=s.id;
+    end if;
     if p_action in ('host_state','export') and s.host_id<>h.id then raise exception 'Not your game'; end if;
     select coalesce(jsonb_agg(jsonb_build_object('id',z.id,'nickname',z.nickname,'team',z.team,'score',z.score,'removed',z.removed) order by z.score desc,z.nickname),'[]'::jsonb) into entries
     from (
@@ -277,7 +302,7 @@ begin
     question:=s.snapshot->'questions'->s.question_index;
     secs:=(question->>'seconds')::int;
     elapsed:=extract(epoch from (clock_timestamp()-s.started_at));
-    if elapsed>secs+1 then raise exception 'Time is up'; end if;
+    if elapsed>=secs then raise exception 'Time is up'; end if;
     answer:=p->'answer';
     if jsonb_typeof(answer) is null then raise exception 'Answer required'; end if;
     is_correct:=false; credit:=0;
@@ -304,6 +329,21 @@ begin
     pts:=floor(credit*coalesce((question->>'points')::integer,1000)*multiplier);
     if s.streak_enabled and is_correct and exists(select 1 from public.quizzy_answers a where a.player_id=player.id and a.question_index=s.question_index-1 and a.correct) then pts:=pts+100; end if;
     insert into public.quizzy_answers(session_id,player_id,question_index,response,correct,points) values(s.id,player.id,s.question_index,answer,is_correct,pts);
+    -- The session row is locked above. The last active player's submission
+    -- atomically closes the question; no client can submit afterward.
+    if (select count(*) from public.quizzy_players x where x.session_id=s.id and not x.removed)>0
+      and not exists (
+        select 1 from public.quizzy_players x
+        where x.session_id=s.id and not x.removed
+          and not exists (
+            select 1 from public.quizzy_answers a
+            where a.player_id=x.id and a.question_index=s.question_index
+          )
+      )
+    then
+      update public.quizzy_sessions set phase='closed' where id=s.id;
+      update public.quizzy_signal set version=version+1 where session_id=s.id;
+    end if;
     return jsonb_build_object('accepted',true);
   elsif p_action='control' then
     select * into s from public.quizzy_sessions where pin=p->>'pin' and host_id=h.id for update;
@@ -324,7 +364,7 @@ begin
       if s.phase<>'paused' then raise exception 'Not paused'; end if;
       update public.quizzy_sessions set phase='question',started_at=started_at+(clock_timestamp()-paused_at),paused_at=null where id=s.id;
     elsif code='reveal' then
-      if s.phase not in ('question','paused') then raise exception 'No question to reveal'; end if;
+      if s.phase not in ('question','paused','closed') then raise exception 'No question to reveal'; end if;
       update public.quizzy_sessions set phase='reveal' where id=s.id;
     elsif code='leaderboard' then
       update public.quizzy_sessions set phase='leaderboard',rankings_visible=true where id=s.id;
