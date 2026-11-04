@@ -115,18 +115,25 @@ function renderHost(){
 }
 function renderHostSession(){
  if(page!=='host')return;let box=$('hostSession');if(!box){renderHost();box=$('hostSession')}if(!state)return;
- let s=state;const controls=[['start','Start / next question'],['pause','Pause'],['resume','Resume'],['reveal','Reveal answer'],['leaderboard','Show leaderboard'],['next','Next question'],['previous','Previous question'],['reopen','Reopen question'],['skip','Cancel question'],['joining',s.joining_locked?'Unlock joining':'Lock joining'],['rankings',s.rankings_visible?'Hide rankings':'Show rankings'],['finish','End game']];
- box.innerHTML='<div class="between"><div><span class="eyebrow">Game PIN</span><div class="pin">'+esc(s.pin)+'</div><h2>'+esc(s.title)+'</h2><span class="tag">'+esc(s.phase)+'</span></div><div class="stack"><a target="_blank" href="'+link('quizzyprojector.html',s.pin)+'">Open projector ↗</a><a target="_blank" href="'+link('quizzy.html',s.pin)+'">Player join link ↗</a><a target="_blank" href="'+link('quizzyresults.html',s.pin)+'">Results ↗</a></div></div><h2>Live controls</h2><div class="row">'+controls.map(x=>'<button class="'+(['skip','finish','reopen'].includes(x[0])?'danger':'secondary')+'" onclick="Quizzy.control(\''+x[0]+'\')">'+x[1]+'</button>').join('')+'</div>'
+ let s=state;const controls=[...(s.phase==='lobby'?[['start','Start game']]:[]),...(s.phase==='question'?[['pause','⏸ Pause']]:s.phase==='paused'?[['resume','▶ Resume']]:[]),...(s.phase==='question'||s.phase==='paused'?[['reveal','Reveal answer']]:[]),...(s.question_index>=0?[['leaderboard','Show leaderboard']]:[]),...(s.phase!=='lobby'&&s.question_index+1<s.question_count?[['next','Next question']]:[]),...(s.question_index>0?[['previous','Previous question']]:[]),...(s.question_index>=0&&s.phase!=='question'&&s.phase!=='paused'?[['reopen','Reopen question']]:[]),...(s.phase==='question'||s.phase==='paused'?[['skip','Cancel question']]:[]),['joining',s.joining_locked?'Unlock joining':'Lock joining'],['rankings',s.rankings_visible?'Hide rankings':'Show rankings'],...(s.phase!=='finished'?[['finish','End game']]:[]),['restart','↺ Restart game']];
+ box.innerHTML='<div class="between"><div><span class="eyebrow">Game PIN</span><div class="pin">'+esc(s.pin)+'</div><h2>'+esc(s.title)+'</h2><span class="tag">'+esc(s.phase)+'</span></div><div class="stack"><a target="_blank" href="'+link('quizzyprojector.html',s.pin)+'">Open projector ↗</a><a target="_blank" href="'+link('quizzy.html',s.pin)+'">Player join link ↗</a><a target="_blank" href="'+link('quizzyresults.html',s.pin)+'">Results ↗</a></div></div><h2>Live controls</h2><div class="row">'+controls.map(x=>'<button class="'+(['skip','finish','reopen','restart'].includes(x[0])?'danger':'secondary')+'" onclick="Quizzy.control(\''+x[0]+'\')">'+x[1]+'</button>').join('')+'</div>'
  +'<div class="grid"><div class="card"><div class="eyebrow">Current question</div><h2>'+(s.question_index+1)+' / '+s.question_count+'</h2><h3>'+esc(s.question?.text||'Lobby')+'</h3><div id="countdown" class="timer"></div><p>'+((s.answers||[]).filter(a=>a.question_index===s.question_index)).length+' answers received</p></div><div class="card"><h2>Standings</h2>'+leaders(s)+'</div></div>'
  +'<h2>Players ('+s.players.length+')</h2><div class="tablewrap"><table><thead><tr><th>Nickname</th><th>Team</th><th>Score</th><th>Actions</th></tr></thead><tbody>'+s.players.map(x=>'<tr><td>'+esc(x.nickname)+(x.removed?' (removed)':'')+'</td><td>'+esc(x.team||'—')+'</td><td>'+Number(x.score||0)+'</td><td><button class="secondary" onclick="Quizzy.adjust(\''+x.id+'\')">± Points</button> <button class="danger" onclick="Quizzy.removePlayer(\''+x.id+'\')">Remove</button></td></tr>').join('')+'</tbody></table></div>'
- +'<div class="row"><button onclick="Quizzy.exportCSV()">Export results CSV</button><button class="secondary" onclick="Quizzy.exportJSON()">Export full JSON</button><button class="secondary" onclick="Quizzy.refresh()">↻ Refresh</button></div>';
+ +'<div class="row"><button class="danger" onclick="Quizzy.deleteSession(\''+esc(s.pin)+'\')">Delete this game</button><button onclick="Quizzy.exportCSV()">Export results CSV</button><button class="secondary" onclick="Quizzy.exportJSON()">Export full JSON</button><button class="secondary" onclick="Quizzy.refresh()">↻ Refresh</button></div>';
  renderClock(s);
 }
 async function control(command){
  if(command==='finish'&&!confirm('End this game for everyone?'))return;
+ if(command==='restart'&&!confirm('Restart this game? All answers, scores and adjustments will be cleared. All active players will stay joined with their nicknames and teams, and everyone will return to the lobby. This cannot be undone.'))return;
  if(command==='reopen'&&!confirm('Reopen this question? All previous answers for this question will be deleted and scores recalculated.'))return;
  if(command==='skip'&&!confirm('Cancel this question and remove its points from rankings?'))return;
- await execute(async()=>{await api('control',{pin:pin(),command,...(command==='reopen'?{confirm:'REOPEN'}:{})});await refresh()});
+ await execute(async()=>{await api('control',{pin:pin(),command,...(command==='reopen'?{confirm:'REOPEN'}:command==='restart'?{confirm:'RESTART'}:{})});await refresh()});
+}
+async function deleteSession(targetPin){
+ const typed=prompt('Permanently delete game '+targetPin+' and all its players, answers and results? Type its six-digit PIN to confirm:');
+ if(typed===null)return;
+ if(typed.trim()!==targetPin){notice('Deletion canceled: PIN did not match.');return}
+ await execute(async()=>{await api('delete_session',{pin:targetPin,confirm:targetPin});if(pin()===targetPin)localStorage.removeItem('quizzy_last_pin');location.href='quizzyhost.html'})
 }
 async function adjust(player_id){let raw=prompt('Points adjustment (e.g. 100 or -100):');if(raw===null)return;let delta=Number(raw);if(!Number.isInteger(delta)||Math.abs(delta)>100000)return notice('Enter an integer between -100000 and 100000');await execute(async()=>{await api('adjust',{pin:pin(),player_id,delta,reason:'Manual host adjustment'});await refresh()})}
 async function removePlayer(player_id){if(!confirm('Remove this player?'))return;await execute(async()=>{await api('remove_player',{pin:pin(),player_id});await refresh()})}
@@ -182,6 +189,6 @@ async function init(){
  }
  }catch(e){toastError(e);if(page==='host'||page==='edit')loginUI()}
 }
-window.Quizzy={logout(){sessionStorage.removeItem('quizzy_host_code');location.href='quizzyhost.html'},refresh,choose,lockMulti,answerNumber,control,adjust,removePlayer,exportCSV,exportJSON,openSession(p){persistPin(p);location.href=link('quizzyhost.html',p)},addQuestion,deleteQuestion,moveQuestion,addOption,removeOption,saveEditor,duplicate,share,deleteQuiz,importJSON,importCSV,exportQuiz};
+window.Quizzy={logout(){sessionStorage.removeItem('quizzy_host_code');location.href='quizzyhost.html'},refresh,choose,lockMulti,answerNumber,control,deleteSession,adjust,removePlayer,exportCSV,exportJSON,openSession(p){persistPin(p);location.href=link('quizzyhost.html',p)},addQuestion,deleteQuestion,moveQuestion,addOption,removeOption,saveEditor,duplicate,share,deleteQuiz,importJSON,importCSV,exportQuiz};
 init();
 })();
