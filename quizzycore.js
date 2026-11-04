@@ -48,12 +48,12 @@ function questionCard(s,projector){
 }
 function bindForm(id,callback){const node=$(id);if(node)node.addEventListener('submit',async e=>{e.preventDefault();await execute(()=>callback(new FormData(node)))});}
 function renderJoin(){
- const p=pin(),name=$('nickname')?.value||'',team=$('team')?.value||'';
+ const p=$('joinForm')?.elements.namedItem('pin')?.value || pin(),name=$('nickname')?.value||'',team=$('team')?.value||'';
  $('app').innerHTML=form('joinForm','<label>Six-digit game PIN</label><input name="pin" maxlength="6" pattern="[0-9]{6}" inputmode="numeric" autocomplete="one-time-code" required value="'+attr(p)+'"><label>Nickname</label><input name="nickname" id="nickname" maxlength="30" required value="'+attr(name)+'"><div id="teamSelect">'+(state?.mode==='team'?'<label>Choose a team</label><select name="team" id="team">'+(state.teams||[]).map(t=>option(t,t)).join('')+'</select>':'')+'</div><button style="width:100%;margin-top:16px">Join game →</button>');
- bindForm('joinForm',async d=>{let p=String(d.get('pin')||'').trim(),nickname=String(d.get('nickname')||'').trim(),team=String(d.get('team')||'');await api('join',{pin,nickname,team});persistPin(p);location.href=link('quizzyplay.html',p)});
+ bindForm('joinForm',async d=>{let p=String(d.get('pin')||'').replace(/\s/g,''),nickname=String(d.get('nickname')||'').trim(),team=String(d.get('team')||'');if(!/^\d{6}$/.test(p))throw Error('Enter the six-digit PIN shown on the Quizzy host dashboard');const current=await api('public_state',{pin:p});if(current.phase!=='lobby'&&!current.me)throw Error('This game has already started or joining is closed');if(current.mode==='team'&&!team){state=current;renderJoin();throw Error('Select a team, then join again')}await api('join',{pin:p,nickname,team});persistPin(p);location.href=link('quizzyplay.html',p)});
  const pinBox=$('joinForm').elements.namedItem('pin');
- pinBox.addEventListener('change',async()=>{let p=pinBox.value.trim();if(!/^\d{6}$/.test(p))return;try{state=await api('public_state',{pin:p});const name=$('nickname')?.value||'';persistPin(p);renderJoin();$('nickname').value=name;}catch(e){notice('Game lookup: '+e.message)}});
- if(state?.mode==='team')$('team')?.setAttribute('value',team);
+ pinBox.addEventListener('change',async()=>{let p=pinBox.value.replace(/\s/g,'');if(!/^\d{6}$/.test(p))return;try{const lookup=await api('public_state',{pin:p});if(pinBox.isConnected&&pinBox.value.replace(/\s/g,'')!==p)return;state=lookup;const name=$('nickname')?.value||'';persistPin(p);history.replaceState(null,'',new URL('quizzy.html?pin='+encodeURIComponent(p),location.href));renderJoin();$('nickname').value=name;}catch(e){notice('Game lookup: '+e.message)}});
+ if(state?.mode==='team'&&team)$('team').value=team;
 }
 function renderPlayer(){
  if(!state){$('app').innerHTML='<div class="card">Connecting to game…</div>';return}
