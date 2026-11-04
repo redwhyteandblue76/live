@@ -35,7 +35,7 @@ declare
   uid uuid := auth.uid();
 begin
   if uid is null then raise exception 'Sign in anonymously first'; end if;
-  if p_action in ('host_login','host_quizzes','host_sessions','delete_session','shared_quiz','save_quiz','delete_quiz','create_session','host_state','control','adjust','remove_player','create_host','export') then
+  if p_action in ('host_login','host_quizzes','host_sessions','duplicate_session','delete_session','shared_quiz','save_quiz','delete_quiz','create_session','host_state','control','adjust','remove_player','create_host','export') then
     select * into h from public.quizzy_hosts where active and code_hash=extensions.crypt(host_code,code_hash) limit 1;
     if h.id is null then raise exception 'Invalid Quizzy host code'; end if;
   end if;
@@ -50,6 +50,33 @@ begin
     select coalesce(jsonb_agg(jsonb_build_object('pin',pin,'title',title,'phase',phase,'created_at',created_at) order by created_at desc),'[]'::jsonb)
       into result from public.quizzy_sessions where host_id=h.id;
     return result;
+  elsif p_action='duplicate_session' then
+    select * into s from public.quizzy_sessions where pin=p->>'pin' and host_id=h.id;
+    if s.id is null then raise exception 'Game not found or not owned by you'; end if;
+    loop
+      code:=lpad((floor(random()*1000000))::int::text,6,'0');
+      begin
+        insert into public.quizzy_sessions(pin,host_id,quiz_id,snapshot,title,mode,score_mode,team_mode,streak_enabled,randomize_options,display_mode,teams)
+        values(code,h.id,s.quiz_id,s.snapshot,s.title,s.mode,s.score_mode,s.team_mode,s.streak_enabled,s.randomize_options,s.display_mode,s.teams) returning id into sid;
+        exit;
+      exception when unique_violation then continue;
+      end;
+    end loop;
+    insert into public.quizzy_signal(session_id) values(sid);
+    return jsonb_build_object('pin',code);
+  elsif p_action='summary' then
+    select * into s from public.quizzy_sessions where pin=p->>'pin';
+    if s.id is null then raise exception 'Game not found'; end if;
+    if s.phase<>'finished' then raise exception 'Summary available after game ends'; end if;
+    select coalesce(jsonb_agg(jsonb_build_object(
+      'index',n.ordinality,'text',n.question->>'text',
+      'cancelled',s.cancelled_questions @> jsonb_build_array((n.ordinality-1)::int),
+      'answers',(select count(*) from public.quizzy_answers a where a.session_id=s.id and a.question_index=n.ordinality-1),
+      'correct',(select count(*) from public.quizzy_answers a where a.session_id=s.id and a.question_index=n.ordinality-1 and a.correct),
+      'accuracy',coalesce((select round(100.0*count(*) filter(where a.correct)/nullif(count(*),0)) from public.quizzy_answers a where a.session_id=s.id and a.question_index=n.ordinality-1),0)
+    ) order by n.ordinality),'[]'::jsonb) into entries
+    from jsonb_array_elements(s.snapshot->'questions') with ordinality n(question,ordinality);
+    return jsonb_build_object('title',s.title,'question_stats',entries);
   elsif p_action='delete_session' then
     select * into s from public.quizzy_sessions where pin=p->>'pin' and host_id=h.id for update;
     if s.id is null then raise exception 'Game not found or not owned by you'; end if;
@@ -148,7 +175,7 @@ begin
     if p_action='export' then
       return jsonb_build_object('title',s.title,'players',entries,'answers',(select coalesce(jsonb_agg(to_jsonb(a)),'[]'::jsonb) from public.quizzy_answers a where a.session_id=s.id),'adjustments',(select coalesce(jsonb_agg(to_jsonb(a)),'[]'::jsonb) from public.quizzy_adjustments a where a.session_id=s.id));
     end if;
-    response:=jsonb_build_object('pin',s.pin,'title',s.title,'mode',s.mode,'team_mode',s.team_mode,'score_mode',s.score_mode,'teams',s.teams,'display_mode',s.display_mode,'phase',s.phase,'question_index',s.question_index,'question_count',jsonb_array_length(questions),'question',question,'seconds',coalesce((question->>'seconds')::integer,0),'started_at',s.started_at,'paused_at',s.paused_at,'joining_locked',s.joining_locked,'rankings_visible',s.rankings_visible,'players',case when p_action='host_state' or s.phase='finished' or (s.rankings_visible and s.phase in ('leaderboard','reveal')) then entries else (select coalesce(jsonb_agg(jsonb_build_object('nickname',x->>'nickname','team',x->>'team')),'[]'::jsonb) from jsonb_array_elements(entries) x) end);
+    response:=jsonb_build_object('pin',s.pin,'title',s.title,'mode',s.mode,'team_mode',s.team_mode,'score_mode',s.score_mode,'teams',s.teams,'display_mode',s.display_mode,'phase',s.phase,'question_index',s.question_index,'question_count',jsonb_array_length(questions),'question',question,'seconds',coalesce((question->>'seconds')::integer,0),'started_at',s.started_at,'paused_at',s.paused_at,'server_time',clock_timestamp(),'joining_locked',s.joining_locked,'rankings_visible',s.rankings_visible,'players',case when p_action='host_state' or s.phase='finished' or (s.rankings_visible and s.phase in ('leaderboard','reveal')) then entries else (select coalesce(jsonb_agg(jsonb_build_object('nickname',x->>'nickname','team',x->>'team')),'[]'::jsonb) from jsonb_array_elements(entries) x) end);
     if p_action='host_state' then
       response:=response||jsonb_build_object('questions',questions,'cancelled_questions',s.cancelled_questions,'answers',(select coalesce(jsonb_agg(to_jsonb(a)),'[]'::jsonb) from public.quizzy_answers a where a.session_id=s.id));
     else
