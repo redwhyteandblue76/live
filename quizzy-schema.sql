@@ -116,7 +116,7 @@ declare
   uid uuid := auth.uid();
 begin
   if uid is null then raise exception 'Sign in anonymously first'; end if;
-  if p_action in ('host_login','host_quizzes','host_sessions','shared_quiz','save_quiz','delete_quiz','create_session','host_state','control','adjust','remove_player','create_host','export') then
+  if p_action in ('host_login','host_quizzes','host_sessions','delete_session','shared_quiz','save_quiz','delete_quiz','create_session','host_state','control','adjust','remove_player','create_host','export') then
     select * into h from public.quizzy_hosts where active and code_hash=extensions.crypt(host_code,code_hash) limit 1;
     if h.id is null then raise exception 'Invalid Quizzy host code'; end if;
   end if;
@@ -131,6 +131,12 @@ begin
     select coalesce(jsonb_agg(jsonb_build_object('pin',pin,'title',title,'phase',phase,'created_at',created_at) order by created_at desc),'[]'::jsonb)
       into result from public.quizzy_sessions where host_id=h.id;
     return result;
+  elsif p_action='delete_session' then
+    select * into s from public.quizzy_sessions where pin=p->>'pin' and host_id=h.id for update;
+    if s.id is null then raise exception 'Game not found or not owned by you'; end if;
+    if p->>'confirm' <> s.pin then raise exception 'Enter the game PIN to confirm deletion'; end if;
+    delete from public.quizzy_sessions where id=s.id;
+    return jsonb_build_object('ok',true,'deleted_pin',s.pin);
   elsif p_action='host_quizzes' then
     select coalesce(jsonb_agg(jsonb_build_object('id',id,'title',title,'content',content,'share_token',share_token,'owner',owner_id=h.id) order by updated_at desc),'[]'::jsonb)
     into result from public.quizzy_quizzes where owner_id=h.id;
@@ -276,7 +282,12 @@ begin
     select * into s from public.quizzy_sessions where pin=p->>'pin' and host_id=h.id for update;
     if s.id is null then raise exception 'Game not found or not owned by you'; end if;
     code:=p->>'command';
-    if code='start' or code='next' then
+    if code='restart' then
+      if p->>'confirm'<>'RESTART' then raise exception 'Explicit restart confirmation required'; end if;
+      delete from public.quizzy_answers where session_id=s.id;
+      delete from public.quizzy_adjustments where session_id=s.id;
+      update public.quizzy_sessions set phase='lobby',question_index=-1,started_at=null,paused_at=null,joining_locked=false,rankings_visible=true,cancelled_questions='[]'::jsonb where id=s.id;
+    elsif code='start' or code='next' then
       if s.question_index+1>=jsonb_array_length(s.snapshot->'questions') then raise exception 'No more questions'; end if;
       update public.quizzy_sessions set question_index=question_index+1,phase=case when exists(select 1 from public.quizzy_answers a where a.session_id=s.id and a.question_index=s.question_index+1) then 'reveal' else 'question' end,started_at=clock_timestamp(),paused_at=null where id=s.id;
     elsif code='pause' then
@@ -322,6 +333,7 @@ begin
     return jsonb_build_object('ok',true);
   else raise exception 'Unknown Quizzy action'; end if;
 end $$;
+
 revoke all on function public.quizzy_api(text,jsonb) from public;
 grant execute on function public.quizzy_api(text,jsonb) to authenticated;
 -- Add quizzy_signal to Supabase realtime (safe to re-run)
