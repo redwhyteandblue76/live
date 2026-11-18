@@ -8,7 +8,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const attr=esc;
 const pin=()=>new URLSearchParams(location.search).get('pin')||localStorage.getItem('quizzy_last_pin')||'';
 const hostCode=()=>sessionStorage.getItem('quizzy_host_code')||'';
-let state=null,quizzes=[],sessions=[],chosen=[],editor=null,timer=null,channel=null,loading=false,lastKey='',clockOffset=0,summary=null,summaryPin='';
+let state=null,quizzes=[],sessions=[],chosen=[],editor=null,timer=null,channel=null,loading=false,refreshQueued=false,submitting=false,lastKey='',clockOffset=0,summary=null,summaryPin='';
 const link=(path,p)=>new URL(path+(p?'?pin='+encodeURIComponent(p):''),location.href).href;
 const form=(id,html)=>'<form id="'+id+'">'+html+'</form>';
 function notice(msg){$('notice').textContent=msg||''}
@@ -76,15 +76,45 @@ function renderPlayer(){
  }
  if(phase==='finished'){$('app').innerHTML='<section class="hero center"><h1>Game complete!</h1><p>Great playing, '+esc(state.me.nickname)+'</p></section>'+podium(state)+'<div class="card">'+leaders(state)+'</div>';return}
 }
-async function refresh(){if(loading||!pin()||page==='edit')return;loading=true;try{state=await api(page==='host'&&hostCode()?'host_state':'public_state',{pin:pin()});if(['results','projector','host'].includes(page)&&state.phase==='finished'&&summaryPin!==pin()){summary=await api('summary',{pin:pin()});summaryPin=pin()}else if(state.phase!=='finished'){summary=null;summaryPin=''}notice('');if(page==='host')renderHostSession();else if(page==='play')renderPlayer();else if(page==='projector')renderProjector();else if(page==='results')renderResults();}catch(e){toastError(e)}finally{loading=false}}
+async function refresh(){if(!pin()||page==='edit')return;if(loading){refreshQueued=true;return}loading=true;try{state=await api(page==='host'&&hostCode()?'host_state':'public_state',{pin:pin()});if(['results','projector','host'].includes(page)&&state.phase==='finished'&&summaryPin!==pin()){summary=await api('summary',{pin:pin()});summaryPin=pin()}else if(state.phase!=='finished'){summary=null;summaryPin=''}notice('');if(page==='host')renderHostSession();else if(page==='play')renderPlayer();else if(page==='projector')renderProjector();else if(page==='results')renderResults();}catch(e){toastError(e)}finally{loading=false;if(refreshQueued){refreshQueued=false;queueMicrotask(refresh)}}}
 function subscribe(){if(channel)db.removeChannel(channel);if(!pin())return;channel=db.channel('quizzy-'+pin()).on('postgres_changes',{event:'UPDATE',schema:'public',table:'quizzy_signal'},()=>refresh()).subscribe()}
-async function choose(i){
- if(!state||state.phase!=='question'||state.my_answer!=null||secondsLeft(state)<=0)return;
- let q=state.question,v=q.options[i];if(q.type==='multi'){chosen=chosen.includes(v)?chosen.filter(x=>x!==v):[...chosen,v];lastKey='';renderPlayer();return}
- await execute(async()=>{await api('submit',{pin:pin(),answer:q.type==='poll'?v:[v]});chosen=[];await refresh()});
+async function submitAnswer(answer){
+ if(submitting||!state||state.phase!=='question'||state.my_answer!=null||secondsLeft(state)<=0)return;
+ submitting=true;
+ document.querySelectorAll('#app button,#numericResponse').forEach(n=>n.disabled=true);
+ await execute(async()=>{
+  await api('submit',{pin:pin(),answer});
+  // Supabase has accepted the answer. Update this device immediately rather than
+  // waiting for a realtime event or a possibly overlapping state refresh.
+  state.my_answer=answer;
+  chosen=[];
+  lastKey='';
+  renderPlayer();
+  await refresh();
+ });
+ submitting=false;
+ // Restore controls only if the submission failed and the question remains open.
+ if(state?.phase==='question'&&state.my_answer==null&&secondsLeft(state)>0)
+  document.querySelectorAll('#app button,#numericResponse').forEach(n=>n.disabled=false);
 }
-async function lockMulti(){if(secondsLeft(state)<=0)return notice('Time is up');if(!chosen.length)return notice('Select at least one answer');await execute(async()=>{await api('submit',{pin:pin(),answer:chosen});chosen=[];await refresh()})}
-async function answerNumber(){if(secondsLeft(state)<=0)return notice('Time is up');let v=Number($('numericResponse')?.value);if(!$('numericResponse')?.value||!Number.isFinite(v))return notice('Enter a valid number');await execute(async()=>{await api('submit',{pin:pin(),answer:v});await refresh()})}
+async function choose(i){
+ if(submitting||!state||state.phase!=='question'||state.my_answer!=null||secondsLeft(state)<=0)return;
+ let q=state.question,v=q.options[i];if(q.type==='multi'){chosen=chosen.includes(v)?chosen.filter(x=>x!==v):[...chosen,v];lastKey='';renderPlayer();return}
+ await submitAnswer(q.type==='poll'?v:[v]);
+}
+async function lockMulti(){
+ if(submitting)return;
+ if(secondsLeft(state)<=0)return notice('Time is up');
+ if(!chosen.length)return notice('Select at least one answer');
+ await submitAnswer([...chosen]);
+}
+async function answerNumber(){
+ if(submitting)return;
+ if(secondsLeft(state)<=0)return notice('Time is up');
+ let input=$('numericResponse'),v=Number(input?.value);
+ if(!input?.value||!Number.isFinite(v))return notice('Enter a valid number');
+ await submitAnswer(v);
+}
 function answerStats(s){if(!s.stats?.length)return '<p>No answers yet.</p>';const groups={};for(let x of s.stats){let label=Array.isArray(x.response)?x.response.join(' · '):String(x.response);groups[label]=(groups[label]||0)+1}return '<div class="card"><h2>Responses ('+s.stats.length+')</h2>'+Object.entries(groups).map(([k,v])=>'<div class="between" style="margin:9px 0"><span>'+esc(k)+'</span><strong>'+v+' · '+Math.round(100*v/s.stats.length)+'%</strong></div>').join('')+'</div>'}
 function renderProjector(){
  if(!state){$('app').innerHTML='<div class="card center">Waiting for a game…</div>';return}
