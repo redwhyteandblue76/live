@@ -8,7 +8,7 @@ const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&
 const attr=esc;
 const pin=()=>new URLSearchParams(location.search).get('pin')||localStorage.getItem('quizzy_last_pin')||'';
 const hostCode=()=>sessionStorage.getItem('quizzy_host_code')||'';
-let state=null,quizzes=[],sessions=[],chosen=[],editor=null,timer=null,channel=null,loading=false,refreshQueued=false,submitting=false,lastKey='',clockOffset=0,summary=null,summaryPin='';
+let state=null,quizzes=[],sessions=[],chosen=[],editor=null,timer=null,channel=null,loading=false,refreshQueued=false,submitting=false,lastKey='',clockOffset=0,summary=null,summaryPin='',autoBusy=false,autoRetryAt=0;
 const link=(path,p)=>new URL(path+(p?'?pin='+encodeURIComponent(p):''),location.href).href;
 const form=(id,html)=>'<form id="'+id+'">'+html+'</form>';
 function notice(msg){$('notice').textContent=msg||''}
@@ -23,6 +23,54 @@ async function api(action,p={}){const sent=Date.now();let {data,error}=await db.
 async function execute(fn){notice('');try{await fn()}catch(e){toastError(e)}}
 function busy(btn,flag){if(btn)btn.disabled=flag}
 function persistPin(p){localStorage.setItem('quizzy_last_pin',p)}
+// Automation preferences are scoped to the host's browser and each game PIN.
+function advanceKey(p=pin()){return 'quizzy_advance_'+p}
+function advanceConfig(p=pin()){
+ try {const c=JSON.parse(localStorage.getItem(advanceKey(p))||'{}');
+ return {mode:c.mode==='auto'?'auto':'manual',seconds:Math.min(120,Math.max(1,Math.round(Number(c.seconds)||5)))}}
+ catch{return {mode:'manual',seconds:5}}
+}
+function saveAdvanceConfig(p,mode,seconds){
+ localStorage.setItem(advanceKey(p),JSON.stringify({mode:mode==='auto'?'auto':'manual',seconds:Math.min(120,Math.max(1,Math.round(Number(seconds)||5)))}));
+}
+function autoDeadlineKey(){return 'quizzy_advance_deadline_'+pin()}
+function clearAutoDeadline(){localStorage.removeItem(autoDeadlineKey())}
+function autoDeadline(s){
+ const id=String(s.question_index);
+ try{const old=JSON.parse(localStorage.getItem(autoDeadlineKey())||'null');if(old?.question===id&&Number.isFinite(old.deadline))return old.deadline}catch{}
+ const deadline=Date.now()+advanceConfig().seconds*1000;
+ localStorage.setItem(autoDeadlineKey(),JSON.stringify({question:id,deadline}));
+ return deadline;
+}
+async function autoAdvanceTick(){
+ if(page!=='host'||!hostCode()||!state||autoBusy||Date.now()<autoRetryAt)return;
+ const s=state;
+ if(advanceConfig().mode!=='auto'||['lobby','finished','paused'].includes(s.phase))return;
+ let command=null;
+ if(s.phase==='closed'||(s.phase==='question'&&secondsLeft(s)<=0)){
+  command='leaderboard';
+ }else if(s.phase==='leaderboard'){
+  if(Date.now()<autoDeadline(s))return;
+  command=s.question_index+1<s.question_count?'next':'finish';
+ }else return;
+ autoBusy=true;
+ try{
+  await api('control',{pin:pin(),command});
+  autoRetryAt=Date.now()+600;
+  if(command!=='leaderboard')clearAutoDeadline();
+  await refresh();
+ }catch(e){autoRetryAt=Date.now()+1500;toastError(e)}
+ finally{autoBusy=false}
+}
+function updateAdvanceSettings(){
+ const mode=$('advanceMode')?.value||'manual',seconds=Number($('advanceSeconds')?.value);
+ if(!Number.isInteger(seconds)||seconds<1||seconds>120)return notice('Leaderboard duration must be between 1 and 120 seconds.');
+ saveAdvanceConfig(pin(),mode,seconds);
+ clearAutoDeadline();
+ notice(mode==='auto'?'Auto advancement enabled. Keep this host dashboard open.':'Manual advancement enabled.');
+ renderHostSession();
+ autoAdvanceTick();
+}
 function teamRows(s){
  let rows=s.players||[],filtered=rows.filter(x=>!x.removed),groups={};
  for(let r of filtered){let k=r.team||'Everyone';(groups[k]??=[]).push(Number(r.score)||0)}
@@ -76,7 +124,7 @@ function renderPlayer(){
  }
  if(phase==='finished'){$('app').innerHTML='<section class="hero center"><h1>Game complete!</h1><p>Great playing, '+esc(state.me.nickname)+'</p></section>'+podium(state)+'<div class="card">'+leaders(state)+'</div>';return}
 }
-async function refresh(){if(!pin()||page==='edit')return;if(loading){refreshQueued=true;return}loading=true;try{state=await api(page==='host'&&hostCode()?'host_state':'public_state',{pin:pin()});if(['results','projector','host'].includes(page)&&state.phase==='finished'&&summaryPin!==pin()){summary=await api('summary',{pin:pin()});summaryPin=pin()}else if(state.phase!=='finished'){summary=null;summaryPin=''}notice('');if(page==='host')renderHostSession();else if(page==='play')renderPlayer();else if(page==='projector')renderProjector();else if(page==='results')renderResults();}catch(e){toastError(e)}finally{loading=false;if(refreshQueued){refreshQueued=false;queueMicrotask(refresh)}}}
+async function refresh(){if(!pin()||page==='edit')return;if(loading){refreshQueued=true;return}loading=true;try{state=await api(page==='host'&&hostCode()?'host_state':'public_state',{pin:pin()});if(['results','projector','host'].includes(page)&&state.phase==='finished'&&summaryPin!==pin()){summary=await api('summary',{pin:pin()});summaryPin=pin()}else if(state.phase!=='finished'){summary=null;summaryPin=''}notice('');if(page==='host'){renderHostSession();autoAdvanceTick()}else if(page==='play')renderPlayer();else if(page==='projector')renderProjector();else if(page==='results')renderResults();}catch(e){toastError(e)}finally{loading=false;if(refreshQueued){refreshQueued=false;queueMicrotask(refresh)}}}
 function subscribe(){if(channel)db.removeChannel(channel);if(!pin())return;channel=db.channel('quizzy-'+pin()).on('postgres_changes',{event:'UPDATE',schema:'public',table:'quizzy_signal'},()=>refresh()).subscribe()}
 async function submitAnswer(answer){
  if(submitting||!state||state.phase!=='question'||state.my_answer!=null||secondsLeft(state)<=0)return;
@@ -136,20 +184,21 @@ function loginUI(){
 async function initHost(){if(!hostCode()){loginUI();return}await api('host_login');quizzes=await api('host_quizzes');sessions=await api('host_sessions');renderHost();if(pin()){subscribe();await refresh()}}
 function renderHost(){
  $('app').innerHTML='<section class="hero"><div class="eyebrow">Host dashboard</div><h1>Your Quizzy games.</h1><p>Create a quiz, then host it as many times as you like.</p><a class="action" href="quizzyedit.html">+ Create or edit quiz</a></section>'
- +'<div class="grid"><section class="card"><h2>Start a new game</h2>'+form('newSession','<label>Quiz</label><select name="quiz_id" required>'+quizzes.map(q=>option(q.title,q.id)).join('')+'</select><label>Competition</label><select name="mode">'+option('Individual','solo')+option('Teams','team')+'</select><label>Team names (comma separated for team mode)</label><input name="teams" placeholder="Red, Blue, Green"><label>Scoring</label><select name="score_mode">'+option('Accuracy + speed','speed')+option('Accuracy only','accuracy')+'</select><label>Team scoring</label><select name="team_mode">'+option('Sum','sum')+option('Average','average')+'</select><label>Player phone display</label><select name="display_mode">'+option('Full question and options','both')+option('Answer buttons only','projector')+'</select><label><input type="checkbox" name="streak_enabled"> Streak bonus</label><button '+(!quizzes.length?'disabled':'')+'>Create game</button>')+'</section>'
+ +'<div class="grid"><section class="card"><h2>Start a new game</h2>'+form('newSession','<label>Quiz</label><select name="quiz_id" required>'+quizzes.map(q=>option(q.title,q.id)).join('')+'</select><label>Competition</label><select name="mode">'+option('Individual','solo')+option('Teams','team')+'</select><label>Team names (comma separated for team mode)</label><input name="teams" placeholder="Red, Blue, Green"><label>Scoring</label><select name="score_mode">'+option('Accuracy + speed','speed')+option('Accuracy only','accuracy')+'</select><label>Team scoring</label><select name="team_mode">'+option('Sum','sum')+option('Average','average')+'</select><label>Player phone display</label><select name="display_mode">'+option('Full question and options','both')+option('Answer buttons only','projector')+'</select><label><input type="checkbox" name="streak_enabled"> Streak bonus</label><label>Question advancement</label><select name="advance_mode">'+option('Manual — host advances','manual')+option('Auto — leaderboard, then next question','auto')+'</select><label>Auto leaderboard duration (seconds)</label><input name="advance_seconds" type="number" min="1" max="120" value="5" required><button '+(!quizzes.length?'disabled':'')+'>Create game</button>')+'</section>'
  +'<section class="card"><h2>Previous games</h2>'+(sessions.length?sessions.map(s=>'<div class="between" style="margin:10px 0"><div><strong>'+esc(s.title)+'</strong><div class="muted small">'+esc(s.pin)+' · '+esc(s.phase)+'</div></div><div class="row"><button class="secondary" onclick="Quizzy.openSession(\''+esc(s.pin)+'\')">Manage</button><button class="secondary" onclick="Quizzy.duplicateSession(\''+esc(s.pin)+'\')">Play again</button><button class="danger" onclick="Quizzy.deleteSession(\''+esc(s.pin)+'\')">Delete</button></div></div>').join(''):'<p>No sessions yet.</p>')+'</section></div>'
  +(pin()?'<section id="hostSession" class="card"><p>Loading session…</p></section>':'');
  bindForm('newSession',async d=>{
  let teams=String(d.get('teams')||'').split(',').map(x=>x.trim()).filter(Boolean);
  if(d.get('mode')==='team'&&new Set(teams).size<2)throw Error('Enter at least two distinct team names');
  let s=await api('create_session',{quiz_id:d.get('quiz_id'),mode:d.get('mode'),teams:teams,score_mode:d.get('score_mode'),team_mode:d.get('team_mode'),display_mode:d.get('display_mode'),streak_enabled:d.has('streak_enabled'),randomize_options:d.has('randomize_options')});
+ saveAdvanceConfig(s.pin,String(d.get('advance_mode')||'manual'),Number(d.get('advance_seconds')||5));
  persistPin(s.pin);location.href=link('quizzyhost.html',s.pin);
  });
 }
 function renderHostSession(){
  if(page!=='host')return;let box=$('hostSession');if(!box){renderHost();box=$('hostSession')}if(!state)return;
- let s=state;const controls=[...(s.phase==='lobby'?[['start','Start game']]:[]),...(s.phase==='question'?[['pause','⏸ Pause']]:s.phase==='paused'?[['resume','▶ Resume']]:[]),...(['question','paused','closed'].includes(s.phase)?[['reveal','Reveal answer']]:[]),...(s.question_index>=0?[['leaderboard','Show leaderboard']]:[]),...(s.phase!=='lobby'&&s.question_index+1<s.question_count?[['next','Next question']]:[]),...(s.question_index>0?[['previous','Previous question']]:[]),...(s.question_index>=0&&s.phase!=='question'&&s.phase!=='paused'?[['reopen','Reopen question']]:[]),...(['question','paused','closed'].includes(s.phase)?[['skip','Cancel question']]:[]),['joining',s.joining_locked?'Unlock joining':'Lock joining'],['rankings',s.rankings_visible?'Hide rankings':'Show rankings'],...(s.phase!=='finished'?[['finish','End game']]:[]),['restart','↺ Restart game']];
- const openSections=[...box.querySelectorAll('details')].map((n,i)=>n.open);box.innerHTML='<div class="between"><div><span class="eyebrow">Game PIN</span><div class="pin">'+esc(s.pin)+'</div><h2>'+esc(s.title)+'</h2><span class="tag">'+esc(s.phase)+'</span></div><div class="stack"><a target="_blank" href="'+link('quizzyprojector.html',s.pin)+'">Open projector ↗</a><a target="_blank" href="'+link('quizzy.html',s.pin)+'">Player join link ↗</a><a target="_blank" href="'+link('quizzyresults.html',s.pin)+'">Results ↗</a></div></div><h2>Live controls</h2><div class="row">'+controls.map(x=>'<button class="'+(['skip','finish','reopen','restart'].includes(x[0])?'danger':'secondary')+'" onclick="Quizzy.control(\''+x[0]+'\')">'+x[1]+'</button>').join('')+'</div></details>'
+ let s=state;const advancement=advanceConfig();const controls=[...(s.phase==='lobby'?[['start','Start game']]:[]),...(s.phase==='question'?[['pause','⏸ Pause']]:s.phase==='paused'?[['resume','▶ Resume']]:[]),...(['question','paused','closed'].includes(s.phase)?[['reveal','Reveal answer']]:[]),...(s.question_index>=0?[['leaderboard','Show leaderboard']]:[]),...(s.phase!=='lobby'&&s.question_index+1<s.question_count?[['next','Next question']]:[]),...(s.question_index>0?[['previous','Previous question']]:[]),...(s.question_index>=0&&s.phase!=='question'&&s.phase!=='paused'?[['reopen','Reopen question']]:[]),...(['question','paused','closed'].includes(s.phase)?[['skip','Cancel question']]:[]),['joining',s.joining_locked?'Unlock joining':'Lock joining'],['rankings',s.rankings_visible?'Hide rankings':'Show rankings'],...(s.phase!=='finished'?[['finish','End game']]:[]),['restart','↺ Restart game']];
+ const openSections=[...box.querySelectorAll('details')].map((n,i)=>n.open);box.innerHTML='<div class="between"><div><span class="eyebrow">Game PIN</span><div class="pin">'+esc(s.pin)+'</div><h2>'+esc(s.title)+'</h2><span class="tag">'+esc(s.phase)+'</span></div><div class="stack"><a target="_blank" href="'+link('quizzyprojector.html',s.pin)+'">Open projector ↗</a><a target="_blank" href="'+link('quizzy.html',s.pin)+'">Player join link ↗</a><a target="_blank" href="'+link('quizzyresults.html',s.pin)+'">Results ↗</a></div></div><h2>Live controls</h2><div class="row">'+controls.map(x=>'<button class="'+(['skip','finish','reopen','restart'].includes(x[0])?'danger':'secondary')+'" onclick="Quizzy.control(\''+x[0]+'\')">'+x[1]+'</button>').join('')+'</div><div class="card"><h3>Question advancement</h3><div class="row"><label>Mode <select id="advanceMode"><option value="manual" '+(advancement.mode==='manual'?'selected':'')+'>Manual</option><option value="auto" '+(advancement.mode==='auto'?'selected':'')+'>Auto</option></select></label><label>Leaderboard (seconds) <input id="advanceSeconds" type="number" min="1" max="120" value="'+advancement.seconds+'"></label><button class="secondary" onclick="Quizzy.updateAdvanceSettings()">Save advancement settings</button></div><p class="muted small">Auto: after answers close, show leaderboard and then move forward after the selected duration. Keep this dashboard open.</p></div>'
  +'<div class="grid"><div class="card"><div class="eyebrow">Current question</div><h2>'+(s.question_index+1)+' / '+s.question_count+'</h2><h3>'+esc(s.question?.text||'Lobby')+'</h3><div id="countdown" class="timer"></div><p>'+((s.answers||[]).filter(a=>a.question_index===s.question_index)).length+' answers received</p></div><div class="card"><h2>Standings</h2>'+leaders(s)+'</div></div>'
  +'<details><summary>👥 Player management ('+s.players.length+')</summary><div class="tablewrap"><table><thead><tr><th>Nickname</th><th>Team</th><th>Score</th><th>Actions</th></tr></thead><tbody>'+s.players.map(x=>'<tr><td>'+esc(x.nickname)+(x.removed?' (removed)':'')+'</td><td>'+esc(x.team||'—')+'</td><td>'+Number(x.score||0)+'</td><td><button class="secondary" onclick="Quizzy.adjust(\''+x.id+'\')">± Points</button> <button class="danger" onclick="Quizzy.removePlayer(\''+x.id+'\')">Remove</button></td></tr>').join('')+'</tbody></table></div></details>'
  +'<details><summary>⚙ Results and game maintenance</summary><div class="row"><button class="danger" onclick="Quizzy.deleteSession(\''+esc(s.pin)+'\')">Delete this game</button><button onclick="Quizzy.exportCSV()">Export results CSV</button><button class="secondary" onclick="Quizzy.exportJSON()">Export full JSON</button><button class="secondary" onclick="Quizzy.refresh()">↻ Refresh</button></div>';
@@ -161,6 +210,7 @@ async function control(command){
  if(command==='restart'&&!confirm('Restart this game? All answers, scores and adjustments will be cleared. All active players will stay joined with their nicknames and teams, and everyone will return to the lobby. This cannot be undone.'))return;
  if(command==='reopen'&&!confirm('Reopen this question? All previous answers for this question will be deleted and scores recalculated.'))return;
  if(command==='skip'&&!confirm('Cancel this question and remove its points from rankings?'))return;
+ clearAutoDeadline();
  await execute(async()=>{await api('control',{pin:pin(),command,...(command==='reopen'?{confirm:'REOPEN'}:command==='restart'?{confirm:'RESTART'}:{})});await refresh()});
 }
 async function deleteSession(targetPin){
@@ -218,12 +268,12 @@ async function init(){
  else if(page==='edit'){if(!hostCode())loginUI();else if(!(await openShare()))await initEditor()}
  else {if(!pin()){location.href='quizzy.html';return}subscribe();await refresh()}
  if(['host','play','projector','results'].includes(page)){
-   setInterval(()=>{if(state)renderClock(state)},300);
+   setInterval(()=>{if(state)renderClock(state);if(page==='host')autoAdvanceTick()},300);
    setInterval(()=>{if(!document.hidden)refresh()},5000);
    document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh()});
  }
  }catch(e){toastError(e);if(page==='host'||page==='edit')loginUI()}
 }
-window.Quizzy={duplicateSession,logout(){sessionStorage.removeItem('quizzy_host_code');location.href='quizzyhost.html'},refresh,choose,lockMulti,answerNumber,control,deleteSession,adjust,removePlayer,exportCSV,exportJSON,openSession(p){persistPin(p);location.href=link('quizzyhost.html',p)},addQuestion,deleteQuestion,moveQuestion,addOption,removeOption,saveEditor,duplicate,share,deleteQuiz,importJSON,importCSV,exportQuiz};
+window.Quizzy={duplicateSession,updateAdvanceSettings,logout(){sessionStorage.removeItem('quizzy_host_code');location.href='quizzyhost.html'},refresh,choose,lockMulti,answerNumber,control,deleteSession,adjust,removePlayer,exportCSV,exportJSON,openSession(p){persistPin(p);location.href=link('quizzyhost.html',p)},addQuestion,deleteQuestion,moveQuestion,addOption,removeOption,saveEditor,duplicate,share,deleteQuiz,importJSON,importCSV,exportQuiz};
 init();
 })();
