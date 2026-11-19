@@ -67,6 +67,7 @@ BEGIN
  SELECT x.business_id,x.voter_id,x.rating,x.created_at
  FROM jsonb_populate_recordset(NULL::public.st_votes,j->'votes') x;
  INSERT INTO public.st_log(id,actor,action,details,at)
+ OVERRIDING SYSTEM VALUE
  SELECT x.id,x.actor,x.action,x.details,x.at
  FROM jsonb_populate_recordset(NULL::public.st_log,j->'logs') x;
  SELECT max(id) INTO max_log FROM public.st_log;
