@@ -49,11 +49,11 @@ BEGIN
   RAISE EXCEPTION 'Invalid event snapshot';
  END IF;
  UPDATE public.st_settings SET active_business=NULL WHERE id=1;
- DELETE FROM public.st_offers;
- DELETE FROM public.st_votes;
- DELETE FROM public.st_businesses;
- DELETE FROM public.st_investors;
- DELETE FROM public.st_log;
+ DELETE FROM public.st_offers WHERE id IS NOT NULL;
+ DELETE FROM public.st_votes WHERE business_id IS NOT NULL;
+ DELETE FROM public.st_businesses WHERE id IS NOT NULL;
+ DELETE FROM public.st_investors WHERE id IS NOT NULL;
+ DELETE FROM public.st_log WHERE id IS NOT NULL;
  INSERT INTO public.st_investors(id,name,title,code,enabled,created_at)
  SELECT x.id,x.name,x.title,x.code,x.enabled,x.created_at
  FROM jsonb_populate_recordset(NULL::public.st_investors,j->'investors') x;
