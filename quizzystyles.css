@@ -18,3 +18,21 @@
 .quizzy-fields{padding:12px 3px 6px}
 .quizzy-fields>.danger{margin-bottom:6px}
 @media(max-width:600px){.quizzy-question-row{padding:9px 8px;gap:7px}.quizzy-question-toolbar button{padding:6px 9px}}
+
+/* Consistent spacing between form controls, action buttons, and grouped fields */
+:root{--quizzy-field-gap:12px;--quizzy-action-gap:16px}
+form>label, .quizzy-fields>label{margin-top:var(--quizzy-field-gap);margin-bottom:7px}
+form>input:not([type="hidden"]):not([type="checkbox"]),form>select,form>textarea,
+.quizzy-fields>input:not([type="checkbox"]),.quizzy-fields>select,.quizzy-fields>textarea{margin-bottom:var(--quizzy-field-gap)}
+form>button,form>.row,form>.action,
+.card>button,.card>.row,
+.quizzy-fields>button,.quizzy-fields>.row{margin-top:var(--quizzy-action-gap)}
+.card>.grid+button,.card>input+button,.card>select+button,.card>textarea+button,
+.card>form+button,.quizzy-fields>.grid+.row,.quizzy-fields>.option-row+.row{margin-top:var(--quizzy-action-gap)}
+.row{column-gap:10px;row-gap:10px}
+.row>button,.row>a.action{margin-top:0}
+.quizzy-library-item{padding:12px 0;gap:12px}
+.quizzy-library-item+.quizzy-library-item{border-top:1px solid #4d5a5c}
+.quizzy-library-item .row{justify-content:flex-start}
+.quizzy-question-row .quizzy-fields>button:first-child{margin-top:4px}
+@media(max-width:600px){.quizzy-library-item{align-items:flex-start}.quizzy-library-item .row{width:100%}}
