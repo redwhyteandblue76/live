@@ -75,3 +75,31 @@ Supabase broadcasts changes to the small `st_signal` table; clients then fetch f
 - The current host UI uses a single admin passphrase and prompts for some actions. It doesn't include a password reset flow; change the admin hash through the SQL Editor if needed.
 - The presentation history selector is controlled locally in the projector browser. Admin publishing changes the underlying active business, but if the projector has manually selected an old history entry, click **Follow Live** to resume.
 - The app is a functional starter implementation, not a tested production deployment. Execute the checklist with your actual Supabase project before using it at an event.
+
+
+## Event Library upgrade (November 2026)
+
+The host console includes an **Events** tab with New Event, Activate/Pause, End/Reopen, Archive/Unarchive, Save JSON, Import JSON, Download Report, and permanent deletion with backup choices.
+
+**Required before using the Events tab:** In the existing Supabase project, back up the database, then run the complete file [shark-event-library-migration.sql](shark-event-library-migration.sql) in SQL Editor **once**. It wraps the existing `st_api` function and preserves existing data as the first registered event. Do not rerun this migration; it renames the existing function to `st_api_legacy`. Refresh the browser after running it.
+
+- One event's tables are loaded into the existing live workspace; all others are saved as database JSON snapshots. Switching is atomic and automatically locks the selected event until the host activates it. This intentionally prevents importing a backup directly into a running public event.
+- The old **rehearsal/live** modes still function *inside each event* after activating it. The Master Lock pauses investor offers separately from the event's lifecycle status.
+- Closing an event sets it to **ended**, locks participation, and shows the event-summary projector. An ended event must be reopened and then activated before further participation.
+- You cannot archive or delete the currently loaded event. Create or load a different event first.
+- JSON v1 backups include businesses, investors, original investor access codes, offers, individual voter UUIDs and ratings, activity history, and event settings. The host passcode hash is **not** exported. Protect JSON files because investor codes are sensitive. Browser login sessions themselves cannot be restored from backups.
+- Downloaded HTML reports are human-readable, printable, and intentionally omit investor access codes and individual voter identifiers.
+- Imported events start as independent **paused** library entries. Imports are checked for structural validity; a malformed or incompatible snapshot may be rejected later when attempting to load it, rolling back without replacing the current event. Always test restorations on a non-production project if data matters.
+- Deletion permanently removes a *stored event snapshot* after explicit confirmation. The UI lets the host download a report and/or backup before deleting. The browser cannot attest that the file was actually saved, so verify downloads first.
+- PostgreSQL transaction serialization prevents event selection from interleaving with offers, votes, or host updates through `st_api`. Direct manual database edits outside the API are not covered by this guarantee.
+
+### Suggested acceptance test
+
+1. Capture a Supabase backup before applying the SQL migration.
+2. Check existing business, investor, and offer information remains unchanged.
+3. Export your original event as JSON and download a report.
+4. Create a new event, load it, and verify the former event is safely stored.
+5. Activate the new event; create a business and investor; close and reopen the event.
+6. Switch back to the original event and verify offer histories, ratings, and codes.
+7. Import the exported JSON as a new paused event, load it, and verify the data.
+8. Switch away, then test archive and delete on a disposable event.
