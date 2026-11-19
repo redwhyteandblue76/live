@@ -7,3 +7,14 @@
 .site-legal-footer a:hover,.site-legal-footer a:focus-visible{color:#5fb3d9}
 .site-legal-footer .sep{padding:0 7px;opacity:.55}
 @media(max-width:480px){.site-legal-footer{font-size:10px;padding:20px 12px}.site-legal-footer .sep{padding:0 4px}}
+
+/* Compact, expandable Quizzy question editor */
+.quizzy-question-row{display:flex;align-items:flex-start;gap:10px;padding:10px 12px;margin:8px 0}
+.quizzy-question-toolbar{display:flex;flex-shrink:0;gap:5px;align-items:center;padding-top:2px}
+.quizzy-question-toolbar button{padding:7px 10px;min-height:35px}
+.quizzy-fold{flex:1;min-width:0;margin:0;padding:0;border:0;border-radius:0}
+.quizzy-fold summary{padding:8px 4px;cursor:pointer;overflow-wrap:anywhere;line-height:1.45}
+.quizzy-fold summary strong{color:var(--cream)}
+.quizzy-fields{padding:12px 3px 6px}
+.quizzy-fields>.danger{margin-bottom:6px}
+@media(max-width:600px){.quizzy-question-row{padding:9px 8px;gap:7px}.quizzy-question-toolbar button{padding:6px 9px}}
