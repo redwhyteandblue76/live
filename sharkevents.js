@@ -45,13 +45,34 @@ function evDeleteDialog(id){
  modal('<h2>Delete '+safe(e.name)+'?</h2><p>Download a restorable backup or a personal event report before deleting. Deletion cannot be undone.</p>'+
  '<div class="stack"><button class="secondary" onclick="evJson(\''+id+'\')">Download restorable JSON</button>'+
  '<button class="secondary" onclick="evReport(\''+id+'\')">Download personal report</button>'+
- '<p class="small muted">JSON backups contain private investor access codes. Downloads cannot be verified automatically.</p><label>Type DELETE to confirm</label>'+
+ '<p class="small muted">JSON backups contain private investor access codes. Downloads cannot be verified automatically.'+(e.current?' Deleting the current event will first create and load a blank, paused replacement.':'')+'</p><label>Type DELETE to confirm</label>'+
  '<input id="evDeleteType" autocomplete="off" placeholder="DELETE"><button class="danger" onclick="evDelete(\''+id+'\')">Permanently Delete</button></div>');
 }
 async function evDelete(id){
  if($('evDeleteType')?.value!=='DELETE')return toast('Type DELETE first',true);
- if(!confirm('Final warning: delete this stored event forever?'))return;
- await evAction('event_delete',{id});$('editModal')?.remove();
+ const entry=eventListCache?.events?.find(e=>e.id===id);
+ if(!entry)return toast('Event not found. Refresh the library.',true);
+ const current=entry.current;
+ const warning=current
+  ? 'Final warning: delete the CURRENT event? A fresh, paused replacement will be created and loaded first. This event and its stored data will then be deleted.'
+  : 'Final warning: permanently delete this saved event?';
+ if(!confirm(warning))return;
+ try{
+   if(current){
+     // The database cannot delete the loaded event. Create a safe blank replacement,
+     // switch transactionally (saving the old event), then remove the old snapshot.
+     const created=await evReq('event_create',{name:'New Shark Tank Event'});
+     if(!created?.event_id)throw Error('Unable to create a replacement event');
+     await evReq('event_select',{id:created.event_id});
+   }
+   await evReq('event_delete',{id});
+   $('editModal')?.remove();
+   await evReload();
+   toast('Event deleted permanently');
+ }catch(e){
+   await evReload().catch(()=>{});
+   toast('Delete incomplete: '+e.message,true);
+ }
 }
 function eventPanel(){
  if(!eventListCache)Promise.resolve().then(()=>evReq('event_list').then(x=>{eventListCache=x;if(tab==='events')render()}).catch(e=>toast('Apply the new SQL migration first: '+e.message,true)));
@@ -61,7 +82,7 @@ function eventPanel(){
  cur.status==='paused'?btn('Activate Event',"evStatus('active')",'success'):null,
  cur.status==='ended'?btn('Reopen as Paused',"evStatus('paused')",'success'):null,
  cur.status!=='ended'?btn('End Event','eventEnd()','danger'):null,
- btn('Download JSON',"evJson('"+id+"')"),btn('Download Report',"evReport('"+id+"')")].filter(Boolean).join(''):'Loading current event…';
+ btn('Download JSON',"evJson('"+id+"')"),btn('Download Report',"evReport('"+id+"')"),btn('Delete Event',"evDeleteDialog('"+id+"')",'danger')].filter(Boolean).join(''):'Loading current event…';
  return '<div class="between"><div><h2>Event Library</h2><p class="muted small">Only one event is loaded publicly at once. New and imported events are saved paused.</p></div><div class="flex">'+btn('↻ Refresh',"evReq('event_list').then(x=>{eventListCache=x;render()})")+btn('＋ New Event','evNew()','success')+btn('Import JSON','evImport()')+'</div></div>'+
  '<div class="card" style="margin:15px 0"><h2>Current: '+safe(state?.settings?.event_name||'Shark Tank')+'</h2><p class="muted">Lifecycle: '+safe(cur?.status||state?.settings?.event_status||'loading')+'</p><div class="flex">'+currentControls+'</div><p class="small muted">The separate Master Lock still controls temporary participation while an event is active.</p></div>'+
  '<div class="grid">'+arr.map(e=>'<div class="card"><div class="between"><h3>'+safe(e.name)+'</h3><span class="tag">'+safe(e.status.toUpperCase())+'</span></div><p class="small muted">'+(e.current?'CURRENT EVENT · ':'')+'Created '+safe(new Date(e.created_at).toLocaleDateString())+'</p><div class="flex">'+
@@ -70,5 +91,5 @@ function eventPanel(){
  (!e.current&&e.status!=='archived'?btn('Archive',"evStatus('archived','"+e.id+"')"):'')+
  btn('JSON',"evJson('"+e.id+"')")+btn('Report',"evReport('"+e.id+"')")+
  (!e.current?btn('Delete',"evDeleteDialog('"+e.id+"')",'danger'):'')+
- '</div></div>').join('')+'</div><p class="small muted">To delete the currently loaded event, first create and load a different event. Event switching saves the outgoing state and loads the selected event transactionally.</p>';
+ '</div></div>').join('')+'</div><p class="small muted">Deleting a currently loaded event automatically creates and loads a blank paused replacement first. Switching events saves the outgoing state transactionally.</p>';
 }
