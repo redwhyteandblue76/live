@@ -380,6 +380,9 @@ begin
       update public.quizzy_sessions set phase='question',started_at=clock_timestamp(),paused_at=null,cancelled_questions=coalesce((select jsonb_agg(v.value) from jsonb_array_elements(s.cancelled_questions) v where v.value<>to_jsonb(s.question_index)),'[]'::jsonb) where id=s.id;
     elsif code='skip' then
       update public.quizzy_sessions set phase='reveal',cancelled_questions=cancelled_questions||jsonb_build_array(s.question_index) where id=s.id;
+    elsif code='reopen_game' then
+      if s.phase<>'finished' then raise exception 'Only ended games can be reopened'; end if;
+      update public.quizzy_sessions set phase=case when s.question_index<0 then 'lobby' else 'reveal' end,started_at=null,paused_at=null where id=s.id;
     elsif code='finish' then
       update public.quizzy_sessions set phase='finished' where id=s.id;
     elsif code='joining' then
