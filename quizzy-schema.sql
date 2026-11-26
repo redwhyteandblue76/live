@@ -257,7 +257,7 @@ begin
       update public.quizzy_signal set version=version+1 where session_id=s.id;
     end if;
     if p_action in ('host_state','export') and s.host_id<>h.id then raise exception 'Not your game'; end if;
-    select coalesce(jsonb_agg(jsonb_build_object('id',z.id,'nickname',z.nickname,'team',z.team,'score',z.score,'removed',z.removed) order by z.score desc,z.nickname),'[]'::jsonb) into entries
+    select coalesce(jsonb_agg(jsonb_build_object('id',z.id,'nickname',z.nickname,'team',z.team,'score',z.score,'removed',z.removed,'question_result',case when s.phase in ('reveal','leaderboard') and s.question_index>=0 then case when s.cancelled_questions @> jsonb_build_array(s.question_index) or (s.snapshot->'questions'->s.question_index->>'type')='poll' then 'neutral' when not exists(select 1 from public.quizzy_answers qa where qa.player_id=z.id and qa.session_id=s.id and qa.question_index=s.question_index) then 'unanswered' when exists(select 1 from public.quizzy_answers qa where qa.player_id=z.id and qa.session_id=s.id and qa.question_index=s.question_index and qa.correct) then 'correct' else 'incorrect' end else null end) order by z.score desc,z.nickname),'[]'::jsonb) into entries
     from (
       select a.id,a.nickname,a.team,a.removed,
         coalesce((select sum(v.points) from public.quizzy_answers v where v.player_id=a.id and not (s.cancelled_questions @> jsonb_build_array(v.question_index))),0)
@@ -292,6 +292,9 @@ begin
       if s.phase in ('reveal','leaderboard','finished') and s.question_index>=0 then
         response:=response||jsonb_build_object('correct',questions->s.question_index->'correct','numeric_value',questions->s.question_index->'value','explanation',questions->s.question_index->'explanation','stats',(select coalesce(jsonb_agg(jsonb_build_object('response',a.response,'correct',a.correct)),'[]'::jsonb) from public.quizzy_answers a where a.session_id=s.id and a.question_index=s.question_index));
       end if;
+    end if;
+    if p_action='public_state' and player.id is not null and not player.removed and s.phase in ('reveal','leaderboard') and s.question_index>=0 then
+      response:=response||jsonb_build_object('my_question_result',case when s.cancelled_questions @> jsonb_build_array(s.question_index) or (s.snapshot->'questions'->s.question_index->>'type')='poll' then 'neutral' when not exists(select 1 from public.quizzy_answers qa where qa.player_id=player.id and qa.session_id=s.id and qa.question_index=s.question_index) then 'unanswered' when exists(select 1 from public.quizzy_answers qa where qa.player_id=player.id and qa.session_id=s.id and qa.question_index=s.question_index and qa.correct) then 'correct' else 'incorrect' end);
     end if;
     return response;
   elsif p_action='submit' then

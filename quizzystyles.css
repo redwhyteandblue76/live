@@ -36,3 +36,14 @@ form>button,form>.row,form>.action,
 .quizzy-library-item .row{justify-content:flex-start}
 .quizzy-question-row .quizzy-fields>button:first-child{margin-top:4px}
 @media(max-width:600px){.quizzy-library-item{align-items:flex-start}.quizzy-library-item .row{width:100%}}
+
+/* Fixed rank-based podium heights, independent of nickname length. */
+.podium{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));align-items:end}
+.podium>.podium-place{height:clamp(130px,25vw,170px);padding:12px 8px!important;display:flex;flex-direction:column;justify-content:center;align-items:center;min-width:0;overflow:hidden}
+.podium>.place-1{height:clamp(190px,35vw,240px);background:#CA6702}
+.podium>.place-3{height:clamp(105px,20vw,140px)}
+.podium>.podium-place h2{font-size:clamp(.8rem,2.6vw,1.25rem);margin:8px 0;max-width:100%;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.podium>.podium-empty{visibility:hidden;padding:0}
+.q-result{display:inline-block;font-weight:900;padding:4px 9px;border-radius:8px;font-size:.9rem;line-height:1.3;white-space:normal}
+.q-result.correct{color:#c3ffe0;background:#14563b}.q-result.incorrect,.q-result.unanswered{color:#ffe0df;background:#822b31}.q-result.neutral,.q-result.unknown{background:#34454c;color:#e2e8eb}
+.personal-result{margin:12px 0}.q-result-large{display:block;padding:22px 12px;font-size:clamp(1.8rem,7vw,3.4rem)}.team-results{display:grid;gap:6px;margin-top:8px;font-size:.85rem}
