@@ -54,7 +54,7 @@ body[data-page="projector"] main{max-width:1600px}
 body[data-page="projector"] #app>.card:has(>#countdown)>h1,
 body[data-page="projector"] #app>.card:has(>.between>#countdown)>h1,
 body[data-page="projector"] #app>.hero:has(>.eyebrow:first-child+h1+h2)>h1{
- font-size:clamp(1.15rem,2.1vw,2.2rem);line-height:1.25;font-weight:700;overflow-wrap:anywhere
+ font-size:clamp(1.15rem,2.1vw,25px);line-height:1.25;font-weight:700;overflow-wrap:anywhere
 }
 body[data-page="projector"] #app>.card:has(>.between>#countdown)>.grid{
  grid-template-columns:repeat(2,minmax(0,1fr));gap:clamp(10px,1.4vw,22px);margin-top:16px
@@ -64,7 +64,7 @@ body[data-page="projector"] #app>.card:has(>.between>#countdown)>.grid>.card{
 }
 body[data-page="projector"] #app>.card:has(>.between>#countdown)>.grid>.card>h2,
 body[data-page="projector"] #app>.hero:has(>.eyebrow:first-child+h1+h2)>h2{
- font-size:clamp(1.65rem,3.8vw,4rem);line-height:1.12;font-weight:800;margin:8px 0;overflow-wrap:anywhere
+ font-size:clamp(1.65rem,3.8vw,48px);line-height:1.12;font-weight:800;margin:8px 0;overflow-wrap:anywhere
 }
 body[data-page="projector"] #app>.card:has(>.between>#countdown)>.grid>.card>.eyebrow{
  font-size:clamp(.85rem,1.2vw,1.25rem)
