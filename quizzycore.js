@@ -11,7 +11,7 @@ const hostCode=()=>sessionStorage.getItem('quizzy_host_code')||'';
 let state=null,quizzes=[],sessions=[],chosen=[],editor=null,timer=null,channel=null,loading=false,refreshQueued=false,submitting=false,lastKey='',clockOffset=0,summary=null,summaryPin='',autoBusy=false,autoRetryAt=0;
 const link=(path,p)=>new URL(path+(p?'?pin='+encodeURIComponent(p):''),location.href).href;
 const form=(id,html)=>'<form id="'+id+'">'+html+'</form>';
-function notice(msg){$('notice').textContent=msg||''}
+function notice(msg){const node=$('notice'),value=msg||'';if(node.textContent!==value)node.textContent=value}
 function toastError(e){notice(e?.message||String(e))}
 function option(text,value){return '<option value="'+attr(value??text)+'">'+esc(text)+'</option>'}
 async function initAuth(){
@@ -112,7 +112,9 @@ function renderJoin(){
 // codes contain local state that should not be overwritten by a server refresh).
 const liveTemplates=new WeakMap();
 function setLiveHTML(root,html){
- const previous=liveTemplates.get(root);
+ const identity=JSON.stringify([state?.pin,state?.phase,state?.question_index]);
+ const cached=liveTemplates.get(root);
+ const previous=cached?.identity===identity?cached:null;
  if(previous?.html===html)return;
  const template=document.createElement('template');template.innerHTML=html;
  if(!previous){root.replaceChildren(template.content.cloneNode(true));}
@@ -138,11 +140,11 @@ function setLiveHTML(root,html){
   }
   patch(root,previous.tree,template.content);
  }
- liveTemplates.set(root,{html,tree:template.content});
+ liveTemplates.set(root,{html,tree:template.content,identity});
 }
 function renderPlayer(){
  if(!state){setLiveHTML($('app'),'<div class="card">Connecting to game…</div>');return}
- $('gameTag').textContent=state.phase.toUpperCase();
+ if($('gameTag').textContent!==state.phase.toUpperCase())$('gameTag').textContent=state.phase.toUpperCase();
  if(!state.me){setLiveHTML($('app'),'<div class="card"><h2>Join this game first</h2><a class="action" href="'+link('quizzy.html',state.pin)+'">Join Quizzy</a></div>');return}
  const phase=state.phase;
  if(!['question','paused'].includes(phase))lastKey='';
